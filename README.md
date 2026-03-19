@@ -1,6 +1,6 @@
 # StudyOps
 
-StudyOps is a desktop-first study operations dashboard for certifications, labs, writeups, and Pomodoro tracking. User accounts, session auth, and app data now live on the backend instead of being stored only in the browser.
+StudyOps is a tracker dashboard for certifications, labs, writeups, and Pomodoro tracking. User accounts, session auth, and app data now live on the backend instead of being stored only in the browser.
 
 ## Live WebSite
 👉 [studyops.nithin0x.space](https://studyops.nithin0x.space/)
