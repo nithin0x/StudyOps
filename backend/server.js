@@ -36,6 +36,8 @@ const VALID_DIFFICULTIES = new Set(["easy", "medium", "hard", "insane"]);
 const VALID_LAB_STATUS = new Set(["todo", "inprogress", "pwned", "stuck"]);
 const VALID_WRITEUP_STATUS = new Set(["none", "draft", "done", "published"]);
 const VALID_VIEWS = new Set(["dashboard", "study", "labs", "calendar", "activity"]);
+const TIMER_MIN_LIMIT = 1;
+const TIMER_MAX_LIMIT = 120;
 const TRUST_PROXY = process.env.TRUST_PROXY === "true" || process.env.TRUST_PROXY === "1";
 const TRUSTED_ORIGINS = new Set(
   (process.env.TRUSTED_ORIGINS ?? "")
@@ -45,6 +47,16 @@ const TRUSTED_ORIGINS = new Set(
 );
 
 const rateBuckets = new Map();
+
+function logPersistError(context, error) {
+  console.error(`[store] ${context}`, error);
+}
+
+function persistStoreAsync(context) {
+  persistStore().catch((error) => {
+    logPersistError(context, error);
+  });
+}
 
 function createEmptyStore() {
   return {
@@ -391,6 +403,26 @@ function sanitizeAppData(payload) {
       focusItemId: sanitizeText(preferencesInput.focusItemId ?? "", 64, "Focus item id", {
         pattern: /^[A-Za-z0-9_-]*$/,
       }),
+      timerDurations: {
+        work: sanitizeInteger(
+          preferencesInput?.timerDurations?.work ?? 25,
+          "Work timer minutes",
+          TIMER_MIN_LIMIT,
+          TIMER_MAX_LIMIT,
+        ),
+        short: sanitizeInteger(
+          preferencesInput?.timerDurations?.short ?? 5,
+          "Short timer minutes",
+          TIMER_MIN_LIMIT,
+          TIMER_MAX_LIMIT,
+        ),
+        long: sanitizeInteger(
+          preferencesInput?.timerDurations?.long ?? 15,
+          "Long timer minutes",
+          TIMER_MIN_LIMIT,
+          TIMER_MAX_LIMIT,
+        ),
+      },
     },
     stats: {
       completedPomodoros: sanitizeInteger(statsInput.completedPomodoros ?? 0, "Completed pomodoros", 0, 50000),
@@ -495,7 +527,7 @@ function cleanupExpiredSessions() {
   store.sessions = store.sessions.filter((session) => new Date(session.expiresAt).getTime() > currentTime);
 
   if (store.sessions.length !== beforeCount) {
-    persistStore().catch(() => {});
+    persistStoreAsync("Failed to persist expired session cleanup.");
   }
 }
 
@@ -655,7 +687,7 @@ function ensureSessionCsrfToken(session) {
 
   if (session) {
     session.csrfToken = csrfToken;
-    persistStore().catch(() => {});
+    persistStoreAsync("Failed to persist generated CSRF token.");
   }
 
   return csrfToken;
@@ -760,7 +792,7 @@ function ensureUserAppData(user) {
 
   const seeded = createSeedAppData();
   store.appDataByUserId[user.id] = seeded;
-  persistStore().catch(() => {});
+  persistStoreAsync("Failed to persist seeded app data.");
   return seeded;
 }
 

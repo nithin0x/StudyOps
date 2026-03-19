@@ -735,6 +735,30 @@ a {
   border-color: rgba(103, 255, 197, 0.3);
 }
 
+.timer-settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.timer-settings .field {
+  gap: 6px;
+}
+
+.timer-settings label {
+  text-transform: capitalize;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+
+.timer-settings input[type="number"] {
+  text-align: center;
+}
+
 .focus-grid {
   display: grid;
   gap: 16px;
@@ -856,6 +880,17 @@ a {
   gap: 10px;
 }
 
+.platform-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-create-form {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  align-items: end;
+}
+
 .platform-chip {
   min-height: 40px;
   padding: 0 14px;
@@ -869,6 +904,30 @@ a {
 .platform-chip.active {
   color: #05121f;
   font-weight: 700;
+}
+
+.danger-button {
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #fecaca;
+}
+
+.lab-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(7, 13, 24, 0.6);
+}
+
+.lab-row-head {
+  align-items: flex-start;
+}
+
+.lab-row-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
 }
 
 .timeline-grid {
@@ -961,6 +1020,10 @@ a {
   .form-grid.two,
   .stats-grid,
   .lab-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .timer-settings {
     grid-template-columns: 1fr;
   }
 

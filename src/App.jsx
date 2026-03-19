@@ -14,11 +14,15 @@ const NAV_ITEMS = [
 const LAB_DIFFICULTIES = ["easy", "medium", "hard", "insane"];
 const LAB_STATUSES = ["todo", "inprogress", "pwned", "stuck"];
 const WRITEUP_STATUSES = ["none", "draft", "done", "published"];
-const TIMER_MODES = {
-  work: 25 * 60,
-  short: 5 * 60,
-  long: 15 * 60,
+const PLATFORM_KEY_PATTERN = /^[a-z0-9-]{2,24}$/;
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+const DEFAULT_TIMER_MINUTES = {
+  work: 25,
+  short: 5,
+  long: 15,
 };
+const TIMER_MIN_LIMIT = 1;
+const TIMER_MAX_LIMIT = 120;
 
 function createId(prefix) {
   if (globalThis.crypto?.randomUUID) {
@@ -37,15 +41,23 @@ function formatTimer(totalSeconds) {
 }
 
 function formatDate(dateValue, options = { month: "short", day: "numeric" }) {
-  if (!dateValue) {
+  const dateKey = toDateKey(dateValue);
+
+  if (!dateKey) {
     return "No date";
   }
 
-  return new Date(`${dateValue}T00:00:00`).toLocaleDateString("en-US", options);
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString("en-US", options);
 }
 
 function formatTimestamp(dateValue) {
-  return new Date(dateValue).toLocaleString("en-US", {
+  const parsed = new Date(dateValue);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "Unknown time";
+  }
+
+  return parsed.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -54,6 +66,14 @@ function formatTimestamp(dateValue) {
 }
 
 function toDateKey(dateValue) {
+  if (typeof dateValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    const parsedFromKey = new Date(`${dateValue}T00:00:00`);
+
+    if (!Number.isNaN(parsedFromKey.getTime())) {
+      return dateValue;
+    }
+  }
+
   const parsed = new Date(dateValue);
 
   if (Number.isNaN(parsed.getTime())) {
@@ -71,6 +91,35 @@ function formatMonthLabel(dateValue) {
     month: "long",
     year: "numeric",
   });
+}
+
+function isSafeHttpUrl(value) {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function getTimerMinutesFromPreferences(preferences) {
+  const configured =
+    preferences?.timerDurations && typeof preferences.timerDurations === "object"
+      ? preferences.timerDurations
+      : {};
+  return {
+    work: Number.isInteger(configured.work) ? configured.work : DEFAULT_TIMER_MINUTES.work,
+    short: Number.isInteger(configured.short) ? configured.short : DEFAULT_TIMER_MINUTES.short,
+    long: Number.isInteger(configured.long) ? configured.long : DEFAULT_TIMER_MINUTES.long,
+  };
+}
+
+function getTimerDurationSeconds(timerMinutes, mode) {
+  return (timerMinutes[mode] ?? DEFAULT_TIMER_MINUTES.work) * 60;
 }
 
 function buildCalendarDays(monthDate) {
@@ -128,7 +177,7 @@ function getNextDeadlines(appData) {
         id: course.id,
         title: course.title,
         type: "Course target",
-        date: course.targetDate,
+        dateKey: toDateKey(course.targetDate),
         note: course.provider,
       })),
     ...appData.study.certs
@@ -137,7 +186,7 @@ function getNextDeadlines(appData) {
         id: cert.id,
         title: cert.title,
         type: "Certification exam",
-        date: cert.examDate,
+        dateKey: toDateKey(cert.examDate),
         note: cert.vendor,
       })),
     ...appData.labs.entries
@@ -146,42 +195,24 @@ function getNextDeadlines(appData) {
         id: lab.id,
         title: lab.name,
         type: "Lab completion",
-        date: lab.completedAt,
+        dateKey: toDateKey(lab.completedAt),
         note: lab.platformKey.toUpperCase(),
       })),
-  ].sort((left, right) => left.date.localeCompare(right.date));
+  ]
+    .filter((item) => item.dateKey)
+    .sort((left, right) => left.dateKey.localeCompare(right.dateKey));
 }
 
 function getCalendarItems(appData) {
-  return [
-    ...getNextDeadlines(appData).map((item) => ({
-      id: `deadline-${item.type}-${item.id}`,
-      title: item.title,
-      type: item.type,
-      dateKey: item.date,
-      meta: item.note,
-      detail: `${item.type} • ${item.note}`,
-      kind: item.type.toLowerCase().replace(/\s+/g, "-"),
-    })),
-    ...appData.activity.map((item) => ({
-      id: `activity-${item.id}`,
-      title: item.label,
-      type: "Activity",
-      dateKey: toDateKey(item.occurredAt),
-      meta: item.type,
-      detail: item.detail,
-      kind: "activity",
-      occurredAt: item.occurredAt,
-    })),
-  ]
-    .filter((item) => item.dateKey)
-    .sort((left, right) => {
-      if (left.dateKey !== right.dateKey) {
-        return left.dateKey.localeCompare(right.dateKey);
-      }
-
-      return (right.occurredAt ?? "").localeCompare(left.occurredAt ?? "");
-    });
+  return getNextDeadlines(appData).map((item) => ({
+    id: `deadline-${item.type}-${item.id}`,
+    title: item.title,
+    type: item.type,
+    dateKey: item.dateKey,
+    meta: item.note,
+    detail: `${item.type} • ${item.note}`,
+    kind: item.type.toLowerCase().replace(/\s+/g, "-"),
+  }));
 }
 
 function updateStudyItem(list, id, updater) {
@@ -422,7 +453,7 @@ function RightRail({ user, appData, saveState, lastSavedAt }) {
             <div className="stack">
               <strong>{nextDeadline.title}</strong>
               <div className="muted">{nextDeadline.type}</div>
-              <div>{formatDate(nextDeadline.date, { month: "long", day: "numeric", year: "numeric" })}</div>
+              <div>{formatDate(nextDeadline.dateKey, { month: "long", day: "numeric", year: "numeric" })}</div>
               <div className="tiny-tag">{nextDeadline.note}</div>
             </div>
           ) : (
@@ -443,6 +474,22 @@ function MetricCard({ label, value, note }) {
       <div className="metric-value">{value}</div>
       <div className="metric-note">{note}</div>
     </div>
+  );
+}
+
+function DeleteButton({ onDelete, confirmMessage }) {
+  function handleClick() {
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    onDelete();
+  }
+
+  return (
+    <button className="ghost-button danger-button" type="button" onClick={handleClick}>
+      Delete
+    </button>
   );
 }
 
@@ -476,9 +523,12 @@ function TaskList({ tasks, onToggle, addValue, onAddValueChange, onAdd }) {
 function DashboardView({
   appData,
   timerMode,
+  timerMinutes,
   secondsLeft,
   isRunning,
   onTimerModeChange,
+  onTimerMinutesChange,
+  onApplyTimerPreset,
   onTimerToggle,
   onTimerReset,
   focusItems,
@@ -489,7 +539,8 @@ function DashboardView({
     appData.study.certs.reduce((sum, item) => sum + item.sessions, 0);
   const completedLabs = appData.labs.entries.filter((lab) => lab.status === "pwned").length;
   const publishedWriteups = appData.labs.entries.filter((lab) => ["done", "published"].includes(lab.writeupStatus)).length;
-  const timerProgress = ((TIMER_MODES[timerMode] - secondsLeft) / TIMER_MODES[timerMode]) * 100;
+  const activeTimerDuration = getTimerDurationSeconds(timerMinutes, timerMode);
+  const timerProgress = ((activeTimerDuration - secondsLeft) / activeTimerDuration) * 100;
 
   return (
     <div className="section">
@@ -523,14 +574,16 @@ function DashboardView({
         <div className="focus-card timer-shell">
           <div className="panel-head">
             <h3 className="panel-title">Pomodoro timer</h3>
-            <span className="tiny-tag warn">{timerMode}</span>
+            <span className="tiny-tag warn">
+              {timerMode} • {timerMinutes[timerMode]}m
+            </span>
           </div>
           <div className="timer-time">{formatTimer(secondsLeft)}</div>
           <div className="timer-progress">
             <span style={{ width: `${Math.max(0, Math.min(timerProgress, 100))}%` }} />
           </div>
           <div className="mode-list">
-            {Object.keys(TIMER_MODES).map((mode) => (
+            {Object.keys(DEFAULT_TIMER_MINUTES).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -540,6 +593,36 @@ function DashboardView({
                 {mode}
               </button>
             ))}
+          </div>
+          <div className="timer-settings">
+            {Object.entries(timerMinutes).map(([mode, minutes]) => (
+              <div className="field" key={mode}>
+                <label>{mode} min</label>
+                <input
+                  type="number"
+                  min={TIMER_MIN_LIMIT}
+                  max={TIMER_MAX_LIMIT}
+                  value={minutes}
+                  onChange={(event) => onTimerMinutesChange(mode, event.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mode-list">
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => onApplyTimerPreset({ work: 25, short: 5, long: 15 })}
+            >
+              Classic 25/5/15
+            </button>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => onApplyTimerPreset({ work: 50, short: 10, long: 20 })}
+            >
+              Deep 50/10/20
+            </button>
           </div>
           <div className="button-row">
             <button className="primary-button" type="button" onClick={onTimerToggle}>
@@ -587,6 +670,8 @@ function StudyView({
   onFormChange,
   onAddCourse,
   onAddCert,
+  onDeleteCourse,
+  onDeleteCert,
   onStudyFieldChange,
   onTaskToggle,
   onTaskDraftChange,
@@ -671,6 +756,10 @@ function StudyView({
               <div className="pill-row">
                 <span className="tag">{course.sessions} sessions</span>
                 <span className="tag">{getProgress(course.tasks)}% done</span>
+                <DeleteButton
+                  onDelete={() => onDeleteCourse(course.id)}
+                  confirmMessage={`Delete course "${course.title}"? This cannot be undone.`}
+                />
               </div>
             </div>
             <div className="progress-line">
@@ -710,6 +799,10 @@ function StudyView({
               <div className="pill-row">
                 <span className="tag">{cert.sessions} sessions</span>
                 <span className={`tiny-tag ${cert.passed ? "good" : "warn"}`}>{cert.passed ? "Passed" : "In progress"}</span>
+                <DeleteButton
+                  onDelete={() => onDeleteCert(cert.id)}
+                  confirmMessage={`Delete certification "${cert.title}"? This cannot be undone.`}
+                />
               </div>
             </div>
             <div className="progress-line">
@@ -751,8 +844,14 @@ function StudyView({
 function LabsView({
   appData,
   labForm,
+  platformForm,
+  labsNotice,
   onLabFormChange,
+  onPlatformFormChange,
+  onAddPlatform,
+  onDeletePlatform,
   onLabAdd,
+  onLabDelete,
   onSelectedPlatformChange,
   onLabFieldChange,
 }) {
@@ -769,6 +868,38 @@ function LabsView({
             <h3 className="section-title">Add rooms, boxes, and writeup progress</h3>
           </div>
         </div>
+        {labsNotice ? <div className="error-banner">{labsNotice}</div> : null}
+        <form className="inline-form platform-create-form" onSubmit={onAddPlatform}>
+          <div className="field">
+            <label>Platform key</label>
+            <input
+              name="key"
+              value={platformForm.key}
+              onChange={onPlatformFormChange}
+              placeholder="eg: pg-practice"
+              maxLength={24}
+              required
+            />
+          </div>
+          <div className="field">
+            <label>Platform name</label>
+            <input
+              name="name"
+              value={platformForm.name}
+              onChange={onPlatformFormChange}
+              placeholder="Platform display name"
+              maxLength={40}
+              required
+            />
+          </div>
+          <div className="field">
+            <label>Accent color</label>
+            <input name="accent" value={platformForm.accent} onChange={onPlatformFormChange} placeholder="#58d5ff" maxLength={7} required />
+          </div>
+          <button className="ghost-button" type="submit">
+            Add platform
+          </button>
+        </form>
         <form className="lab-form" onSubmit={onLabAdd}>
           <div className="form-grid two">
             <div className="field">
@@ -814,22 +945,27 @@ function LabsView({
 
       <div className="platform-filter">
         {appData.labs.platforms.map((platform) => (
-          <button
-            key={platform.key}
-            type="button"
-            className={`platform-chip ${platform.key === visiblePlatform ? "active" : ""}`}
-            style={platform.key === visiblePlatform ? { background: platform.accent, borderColor: platform.accent } : {}}
-            onClick={() => onSelectedPlatformChange(platform.key)}
-          >
-            {platform.name}
-          </button>
+          <div key={platform.key} className="platform-chip-wrap">
+            <button
+              type="button"
+              className={`platform-chip ${platform.key === visiblePlatform ? "active" : ""}`}
+              style={platform.key === visiblePlatform ? { background: platform.accent, borderColor: platform.accent } : {}}
+              onClick={() => onSelectedPlatformChange(platform.key)}
+            >
+              {platform.name}
+            </button>
+            <DeleteButton
+              onDelete={() => onDeletePlatform(platform.key)}
+              confirmMessage={`Delete platform "${platform.name}" and all labs under it? This cannot be undone.`}
+            />
+          </div>
         ))}
       </div>
 
       <div className="lab-grid">
         {visibleLabs.map((lab) => (
-          <div className="lab-card" key={lab.id}>
-            <div className="entry-row">
+          <div className="lab-row" key={lab.id}>
+            <div className="entry-row lab-row-head">
               <div>
                 <h3 className="section-title">{lab.name}</h3>
                 <p className="muted">{lab.os || "No OS set"}</p>
@@ -839,9 +975,13 @@ function LabsView({
                   {lab.platformKey.toUpperCase()}
                 </span>
                 <span className={`status-pill status-${lab.status}`}>{lab.status}</span>
+                <DeleteButton
+                  onDelete={() => onLabDelete(lab.id)}
+                  confirmMessage={`Delete lab "${lab.name}"? This cannot be undone.`}
+                />
               </div>
             </div>
-            <div className="form-grid two">
+            <div className="lab-row-grid">
               <div className="field">
                 <label>Status</label>
                 <select value={lab.status} onChange={(event) => onLabFieldChange(lab.id, "status", event.target.value)}>
@@ -875,30 +1015,35 @@ function LabsView({
                 </select>
               </div>
               <div className="field">
-                <label>Completed at</label>
+                <label>Completed</label>
                 <input type="date" value={lab.completedAt} onChange={(event) => onLabFieldChange(lab.id, "completedAt", event.target.value)} />
               </div>
+              <div className="field">
+                <label>Notes</label>
+                <input value={lab.notes} onChange={(event) => onLabFieldChange(lab.id, "notes", event.target.value)} maxLength={500} />
+              </div>
+              <div className="field">
+                <label>Writeup URL</label>
+                <input
+                  type="url"
+                  value={lab.writeupUrl}
+                  onChange={(event) => onLabFieldChange(lab.id, "writeupUrl", event.target.value)}
+                  placeholder="https://"
+                />
+              </div>
             </div>
-            <div className="field">
-              <label>Notes</label>
-              <textarea value={lab.notes} onChange={(event) => onLabFieldChange(lab.id, "notes", event.target.value)} maxLength={500} />
-            </div>
-            <div className="field">
-              <label>Writeup URL</label>
-              <input
-                type="url"
-                value={lab.writeupUrl}
-                onChange={(event) => onLabFieldChange(lab.id, "writeupUrl", event.target.value)}
-                placeholder="https://"
-              />
-            </div>
-            {lab.writeupUrl ? (
+            {isSafeHttpUrl(lab.writeupUrl) ? (
               <a href={lab.writeupUrl} target="_blank" rel="noopener noreferrer" className="ghost-button" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
                 Open writeup
               </a>
             ) : null}
           </div>
         ))}
+        {visibleLabs.length === 0 ? (
+          <div className="panel">
+            <p className="muted">No labs in this platform yet. Add one above to start tracking.</p>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -906,7 +1051,7 @@ function LabsView({
 
 function CalendarView({ appData }) {
   const items = useMemo(() => getCalendarItems(appData), [appData]);
-  const todayKey = toDateKey(new Date());
+  const todayKey = toDateKey(new Date()) || "1970-01-01";
   const initialMonthKey = items[0]?.dateKey ?? todayKey;
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const initialDate = initialMonthKey ? new Date(`${initialMonthKey}T00:00:00`) : new Date();
@@ -931,7 +1076,7 @@ function CalendarView({ appData }) {
   useEffect(() => {
     const monthPrefix = `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, "0")}`;
 
-    if (selectedDateKey.startsWith(monthPrefix)) {
+    if (typeof selectedDateKey === "string" && selectedDateKey.startsWith(monthPrefix)) {
       return;
     }
 
@@ -944,11 +1089,11 @@ function CalendarView({ appData }) {
     <div className="section">
       <div className="panel">
         <div className="panel-head">
-          <div>
-            <div className="eyebrow">Calendar</div>
-            <h3 className="section-title">Calendar and activity tracker</h3>
-            <p className="panel-copy">See study milestones and logged activity on an actual calendar.</p>
-          </div>
+            <div>
+              <div className="eyebrow">Calendar</div>
+              <h3 className="section-title">Calendar and milestones</h3>
+              <p className="panel-copy">See study milestones on an actual calendar.</p>
+            </div>
           <div className="button-row">
             <button
               className="ghost-button"
@@ -982,8 +1127,8 @@ function CalendarView({ appData }) {
           </div>
           {items.length === 0 ? (
             <div className="empty-state">
-              <h3 className="section-title">No dated activity yet</h3>
-              <p className="muted">Add a course target, exam date, completed lab, or new activity and it will appear here.</p>
+              <h3 className="section-title">No dated milestones yet</h3>
+              <p className="muted">Add a course target, exam date, or completed lab and it will appear here.</p>
             </div>
           ) : null}
           <div className="calendar-weekdays" aria-hidden="true">
@@ -1037,7 +1182,7 @@ function CalendarView({ appData }) {
                   </div>
                 ))
               ) : (
-                <p className="muted">No tracked activity on this day yet.</p>
+                <p className="muted">No milestones on this day yet.</p>
               )}
             </div>
           </div>
@@ -1174,10 +1319,17 @@ export default function App() {
     os: "",
     notes: "",
   });
+  const [platformForm, setPlatformForm] = useState({
+    key: "",
+    name: "",
+    accent: "#58d5ff",
+  });
+  const [labsNotice, setLabsNotice] = useState("");
   const [taskDrafts, setTaskDrafts] = useState({});
   const [timerMode, setTimerMode] = useState("work");
-  const [secondsLeft, setSecondsLeft] = useState(TIMER_MODES.work);
+  const [secondsLeft, setSecondsLeft] = useState(DEFAULT_TIMER_MINUTES.work * 60);
   const [isRunning, setIsRunning] = useState(false);
+  const timerMinutes = useMemo(() => getTimerMinutesFromPreferences(appData?.preferences), [appData?.preferences]);
 
   const skipFirstSave = useRef(true);
 
@@ -1200,6 +1352,7 @@ export default function App() {
           ...current,
           platformKey: session.appData.labs.platforms[0]?.key ?? current.platformKey,
         }));
+        setSecondsLeft(getTimerDurationSeconds(getTimerMinutesFromPreferences(session.appData.preferences), "work"));
         setAuthStatus("authenticated");
       } catch (error) {
         if (cancelled) {
@@ -1316,7 +1469,7 @@ export default function App() {
                 id: createId("activity"),
                 type: "timer",
                 label: "Pomodoro completed",
-                detail: `Finished a ${timerMode} block for ${label}.`,
+                detail: `Finished a ${timerMode} block (${timerMinutes[timerMode]}m) for ${label}.`,
                 occurredAt: new Date().toISOString(),
               },
               ...currentData.activity,
@@ -1324,14 +1477,14 @@ export default function App() {
           };
         });
 
-        return TIMER_MODES[timerMode];
+        return getTimerDurationSeconds(timerMinutes, timerMode);
       });
     }, 1000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [isRunning, timerMode]);
+  }, [isRunning, timerMode, timerMinutes.long, timerMinutes.short, timerMinutes.work]);
 
   const focusItems = useMemo(() => (appData ? getFocusItems(appData) : []), [appData]);
 
@@ -1385,8 +1538,8 @@ export default function App() {
   async function handleLogout() {
     try {
       await api.logout();
-    } catch {
-      // Ignore logout race conditions and clear local state anyway.
+    } catch (error) {
+      console.error("Logout request failed; clearing local state anyway.", error);
     }
 
     api.clearSession();
@@ -1454,6 +1607,29 @@ export default function App() {
     }));
   }
 
+  function handleDeleteCourse(courseId) {
+    updateAppData((current) => {
+      const course = current.study.courses.find((item) => item.id === courseId);
+
+      if (!course) {
+        return current;
+      }
+
+      return {
+        ...current,
+        preferences: {
+          ...current.preferences,
+          focusItemId: current.preferences.focusItemId === courseId ? "" : current.preferences.focusItemId,
+        },
+        study: {
+          ...current.study,
+          courses: current.study.courses.filter((item) => item.id !== courseId),
+        },
+        activity: appendActivity(current, "Course removed", `Removed ${course.title} from the study board.`),
+      };
+    });
+  }
+
   function handleAddCert(event) {
     event.preventDefault();
 
@@ -1483,6 +1659,29 @@ export default function App() {
       ...current,
       cert: { title: "", vendor: "", studyStart: "", examDate: "", notes: "" },
     }));
+  }
+
+  function handleDeleteCert(certId) {
+    updateAppData((current) => {
+      const cert = current.study.certs.find((item) => item.id === certId);
+
+      if (!cert) {
+        return current;
+      }
+
+      return {
+        ...current,
+        preferences: {
+          ...current.preferences,
+          focusItemId: current.preferences.focusItemId === certId ? "" : current.preferences.focusItemId,
+        },
+        study: {
+          ...current.study,
+          certs: current.study.certs.filter((item) => item.id !== certId),
+        },
+        activity: appendActivity(current, "Certification removed", `Removed ${cert.title} from the exam plan.`),
+      };
+    });
   }
 
   function handleStudyFieldChange(collection, id, field, value) {
@@ -1552,6 +1751,7 @@ export default function App() {
 
   function handleLabAdd(event) {
     event.preventDefault();
+    setLabsNotice("");
 
     updateAppData((current) => ({
       ...current,
@@ -1589,6 +1789,144 @@ export default function App() {
     }));
   }
 
+  function handleLabDelete(id) {
+    updateAppData((current) => {
+      const lab = current.labs.entries.find((entry) => entry.id === id);
+
+      if (!lab) {
+        return current;
+      }
+
+      return {
+        ...current,
+        labs: {
+          ...current.labs,
+          entries: current.labs.entries.filter((entry) => entry.id !== id),
+        },
+        activity: appendActivity(current, "Lab removed", `Removed ${lab.name} from ${lab.platformKey.toUpperCase()}.`),
+      };
+    });
+  }
+
+  function handlePlatformFormChange(event) {
+    const { name, value } = event.target;
+    setPlatformForm((current) => ({
+      ...current,
+      [name]: value,
+    }));
+  }
+
+  function handleAddPlatform(event) {
+    event.preventDefault();
+    setLabsNotice("");
+
+    if (!appData) {
+      return;
+    }
+
+    const key = platformForm.key.trim().toLowerCase();
+    const name = platformForm.name.trim();
+    const accent = platformForm.accent.trim();
+
+    if (!PLATFORM_KEY_PATTERN.test(key)) {
+      setLabsNotice("Platform key must be 2-24 characters using lowercase letters, numbers, or hyphens.");
+      return;
+    }
+
+    if (!name) {
+      setLabsNotice("Platform name is required.");
+      return;
+    }
+
+    if (!HEX_COLOR_PATTERN.test(accent)) {
+      setLabsNotice("Accent color must be a valid hex color like #58d5ff.");
+      return;
+    }
+
+    if (appData.labs.platforms.length >= 12) {
+      setLabsNotice("You can add up to 12 lab platforms.");
+      return;
+    }
+
+    if (appData.labs.platforms.some((platform) => platform.key === key)) {
+      setLabsNotice("That platform key already exists.");
+      return;
+    }
+
+    updateAppData((current) => ({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        selectedLabPlatform: key,
+      },
+      labs: {
+        ...current.labs,
+        platforms: [...current.labs.platforms, { key, name, accent }],
+      },
+      activity: appendActivity(current, "Platform added", `Added ${name} (${key}) to lab platforms.`),
+    }));
+    setLabForm((current) => ({
+      ...current,
+      platformKey: key,
+    }));
+    setPlatformForm((current) => ({
+      ...current,
+      key: "",
+      name: "",
+    }));
+  }
+
+  function handleDeletePlatform(platformKey) {
+    if (!appData) {
+      return;
+    }
+
+    if (appData.labs.platforms.length <= 1) {
+      setLabsNotice("At least one platform is required.");
+      return;
+    }
+
+    const platform = appData.labs.platforms.find((item) => item.key === platformKey);
+
+    if (!platform) {
+      return;
+    }
+
+    updateAppData((current) => {
+      const remainingPlatforms = current.labs.platforms.filter((item) => item.key !== platformKey);
+      const fallbackPlatformKey = remainingPlatforms[0]?.key ?? "";
+      const removedLabCount = current.labs.entries.filter((entry) => entry.platformKey === platformKey).length;
+
+      return {
+        ...current,
+        preferences: {
+          ...current.preferences,
+          selectedLabPlatform:
+            current.preferences.selectedLabPlatform === platformKey
+              ? fallbackPlatformKey
+              : current.preferences.selectedLabPlatform,
+        },
+        labs: {
+          ...current.labs,
+          platforms: remainingPlatforms,
+          entries: current.labs.entries.filter((entry) => entry.platformKey !== platformKey),
+        },
+        activity: appendActivity(
+          current,
+          "Platform removed",
+          `Removed ${platform.name} (${platform.key}) and ${removedLabCount} lab${removedLabCount === 1 ? "" : "s"}.`,
+        ),
+      };
+    });
+    setLabForm((current) => ({
+      ...current,
+      platformKey:
+        current.platformKey === platformKey
+          ? appData.labs.platforms.find((item) => item.key !== platformKey)?.key ?? current.platformKey
+          : current.platformKey,
+    }));
+  }
+
   function handleSelectedPlatformChange(platformKey) {
     updateAppData((current) => ({
       ...current,
@@ -1611,7 +1949,7 @@ export default function App() {
 
   function handleTimerModeChange(mode) {
     setTimerMode(mode);
-    setSecondsLeft(TIMER_MODES[mode]);
+    setSecondsLeft(getTimerDurationSeconds(timerMinutes, mode));
     setIsRunning(false);
   }
 
@@ -1621,7 +1959,48 @@ export default function App() {
 
   function handleTimerReset() {
     setIsRunning(false);
-    setSecondsLeft(TIMER_MODES[timerMode]);
+    setSecondsLeft(getTimerDurationSeconds(timerMinutes, timerMode));
+  }
+
+  function handleTimerMinutesChange(mode, value) {
+    const parsed = Number.parseInt(value, 10);
+
+    if (!Number.isInteger(parsed) || parsed < TIMER_MIN_LIMIT || parsed > TIMER_MAX_LIMIT) {
+      return;
+    }
+
+    updateAppData((current) => ({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        timerDurations: {
+          ...getTimerMinutesFromPreferences(current.preferences),
+          [mode]: parsed,
+        },
+      },
+    }));
+
+    if (!isRunning && mode === timerMode) {
+      setSecondsLeft(parsed * 60);
+    }
+  }
+
+  function handleApplyTimerPreset(preset) {
+    updateAppData((current) => ({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        timerDurations: {
+          work: preset.work,
+          short: preset.short,
+          long: preset.long,
+        },
+      },
+    }));
+
+    if (!isRunning) {
+      setSecondsLeft((preset[timerMode] ?? DEFAULT_TIMER_MINUTES.work) * 60);
+    }
   }
 
   function handleFocusChange(value) {
@@ -1664,9 +2043,12 @@ export default function App() {
       onLogout={handleLogout}
       dashboardProps={{
         timerMode,
+        timerMinutes,
         secondsLeft,
         isRunning,
         onTimerModeChange: handleTimerModeChange,
+        onTimerMinutesChange: handleTimerMinutesChange,
+        onApplyTimerPreset: handleApplyTimerPreset,
         onTimerToggle: handleTimerToggle,
         onTimerReset: handleTimerReset,
         focusItems,
@@ -1678,6 +2060,8 @@ export default function App() {
         onFormChange: handleStudyFormChange,
         onAddCourse: handleAddCourse,
         onAddCert: handleAddCert,
+        onDeleteCourse: handleDeleteCourse,
+        onDeleteCert: handleDeleteCert,
         onStudyFieldChange: handleStudyFieldChange,
         onTaskToggle: handleTaskToggle,
         onTaskDraftChange: handleTaskDraftChange,
@@ -1685,8 +2069,14 @@ export default function App() {
       }}
       labsProps={{
         labForm,
+        platformForm,
+        labsNotice,
         onLabFormChange: handleLabFormChange,
+        onPlatformFormChange: handlePlatformFormChange,
+        onAddPlatform: handleAddPlatform,
+        onDeletePlatform: handleDeletePlatform,
         onLabAdd: handleLabAdd,
+        onLabDelete: handleLabDelete,
         onSelectedPlatformChange: handleSelectedPlatformChange,
         onLabFieldChange: handleLabFieldChange,
       }}

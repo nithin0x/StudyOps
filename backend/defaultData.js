@@ -34,6 +34,11 @@ export function createSeedAppData() {
       activeView: "dashboard",
       selectedLabPlatform: "htb",
       focusItemId: "",
+      timerDurations: {
+        work: 25,
+        short: 5,
+        long: 15,
+      },
     },
     stats: {
       completedPomodoros: 0,
@@ -104,6 +109,15 @@ export function removeLegacySeedContent(appData, displayName) {
   const nextFocusItemId = focusIds.has(currentPreferences.focusItemId)
     ? currentPreferences.focusItemId
     : "";
+  const currentTimerDurations =
+    currentPreferences.timerDurations && typeof currentPreferences.timerDurations === "object"
+      ? currentPreferences.timerDurations
+      : {};
+  const nextTimerDurations = {
+    work: Number.isInteger(currentTimerDurations.work) ? currentTimerDurations.work : 25,
+    short: Number.isInteger(currentTimerDurations.short) ? currentTimerDurations.short : 5,
+    long: Number.isInteger(currentTimerDurations.long) ? currentTimerDurations.long : 15,
+  };
   const nextSelectedLabPlatform = allowedPlatformKeys.has(currentPreferences.selectedLabPlatform)
     ? currentPreferences.selectedLabPlatform
     : ensuredPlatforms[0]?.key ?? "";
@@ -128,6 +142,7 @@ export function removeLegacySeedContent(appData, displayName) {
         typeof currentPreferences.activeView === "string" ? currentPreferences.activeView : "dashboard",
       selectedLabPlatform: nextSelectedLabPlatform,
       focusItemId: nextFocusItemId,
+      timerDurations: nextTimerDurations,
     },
     stats: {
       completedPomodoros: Number.isInteger(appData?.stats?.completedPomodoros)
